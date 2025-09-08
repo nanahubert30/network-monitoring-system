@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Network Traffic Monitor - Real Scanning</title>
+    <title>Network Traffic Monitor - Fixed Version</title>
     <style>
         * {
             margin: 0;
@@ -381,7 +381,7 @@
         
         <div class="controls">
             <input type="text" class="subnet-input" id="subnetInput" placeholder="Enter subnet (e.g., 192.168.1)" value="192.168.1">
-            <button class="scan-btn" id="scanBtn" onclick="startRealNetworkScan()">🔍 Scan Network</button>
+            <button class="scan-btn" id="scanBtn" onclick="startNetworkScan()">🔍 Scan Network</button>
             <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">🔄 Refresh</button>
             <button class="status-btn" onclick="toggleSystemInfo()">📊 System Status</button>
         </div>
@@ -435,7 +435,8 @@
     <script>
         let networkDevices = [];
         let scanning = false;
-        const API_BASE = 'network_scanner.php'; // Adjust path as needed
+        // Update this path to match your PHP file location
+        const API_BASE = 'fixed_network_scanner.php';
 
         // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
@@ -448,6 +449,11 @@
         async function checkSystemStatus() {
             try {
                 const response = await fetch(`${API_BASE}?endpoint=status`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 
                 if (data.success) {
@@ -457,19 +463,20 @@
                     // Store system info for display
                     window.systemInfo = data;
                 } else {
-                    throw new Error('System check failed');
+                    throw new Error(data.error || 'System check failed');
                 }
             } catch (error) {
                 document.getElementById('systemStatus').className = 'status-indicator status-offline';
                 document.getElementById('systemStatusText').textContent = 'System Error';
                 showError('Failed to connect to scanning backend: ' + error.message);
+                showInstallationHelp();
             }
         }
 
         /**
-         * Start real network scan using PHP backend
+         * Start network scan using PHP backend
          */
-        async function startRealNetworkScan() {
+        async function startNetworkScan() {
             if (scanning) return;
             
             const subnet = document.getElementById('subnetInput').value.trim();
@@ -493,14 +500,19 @@
                 updateScanProgress('Initializing scan...');
                 
                 const response = await fetch(`${API_BASE}?endpoint=scan&subnet=${encodeURIComponent(subnet)}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 
                 if (data.success) {
                     networkDevices = data.devices || [];
-                    updateDisplay();
+                    updateDisplay(data);
                     
                     document.getElementById('status').textContent = 
-                        `Scan completed! Found ${data.total_devices} devices on ${data.subnet}`;
+                        `Scan completed in ${data.duration || 'unknown time'}! Found ${data.total_devices} devices on ${data.subnet}`;
                 } else {
                     throw new Error(data.error || 'Scan failed');
                 }
@@ -575,8 +587,8 @@
         /**
          * Update the display with scan results
          */
-        function updateDisplay() {
-            updateStats();
+        function updateDisplay(scanData) {
+            updateStats(scanData);
             displayDevices();
             document.getElementById('stats').style.display = 'grid';
         }
@@ -584,18 +596,18 @@
         /**
          * Update statistics display
          */
-        function updateStats() {
+        function updateStats(scanData) {
             const totalDevices = networkDevices.length;
             const switchCount = networkDevices.filter(d => d.deviceCategory === 'switch').length;
             const onlineDevices = networkDevices.filter(d => d.status === 'online').length;
             const offlineDevices = totalDevices - onlineDevices;
-            const currentTime = new Date().toLocaleTimeString();
+            const scanTime = scanData ? scanData.scan_time : new Date().toLocaleTimeString();
             
             document.getElementById('totalDevices').textContent = totalDevices;
             document.getElementById('switchCount').textContent = switchCount;
             document.getElementById('onlineDevices').textContent = onlineDevices;
             document.getElementById('offlineDevices').textContent = offlineDevices;
-            document.getElementById('lastScan').textContent = currentTime;
+            document.getElementById('lastScan').textContent = scanTime;
         }
         
         /**
@@ -684,7 +696,7 @@
                         </div>
                         <div class="detail-row">
                             <span class="detail-label">Open Ports</span>
-                            <span class="detail-value">${device.open_ports ? device.open_ports.join(', ') : 'None detected'}</span>
+                            <span class="detail-value">${device.open_ports && device.open_ports.length > 0 ? device.open_ports.join(', ') : 'None detected'}</span>
                         </div>
                     </div>
                 </div>
@@ -697,10 +709,12 @@
          * Refresh current data
          */
         function refreshData() {
-            if (networkDevices.length > 0) {
+            if (!scanning) {
                 const subnet = document.getElementById('subnetInput').value.trim();
                 if (subnet) {
-                    startRealNetworkScan();
+                    startNetworkScan();
+                } else {
+                    checkSystemStatus();
                 }
             }
         }
@@ -730,24 +744,34 @@
             }
             
             const info = window.systemInfo;
+            const requirements = info.requirements || {};
+            const systemInfo = info.system_info || {};
+            const connectivity = info.connectivity || {};
+            
             const content = `
                 <ul>
-                    <li><strong>PHP Version:</strong> ${info.system_info?.php_version || 'Unknown'}</li>
-                    <li><strong>Operating System:</strong> ${info.system_info?.os || 'Unknown'}</li>
-                    <li><strong>Server:</strong> ${info.system_info?.server_software || 'Unknown'}</li>
-                    <li><strong>Memory Limit:</strong> ${info.system_info?.memory_limit || 'Unknown'}</li>
+                    <li><strong>PHP Version:</strong> ${systemInfo.php_version || 'Unknown'}</li>
+                    <li><strong>Operating System:</strong> ${systemInfo.os || 'Unknown'}</li>
+                    <li><strong>Server:</strong> ${systemInfo.server_software || 'Unknown'}</li>
+                    <li><strong>Memory Limit:</strong> ${systemInfo.memory_limit || 'Unknown'}</li>
+                    <li><strong>Max Execution Time:</strong> ${systemInfo.max_execution_time || 'Unknown'} seconds</li>
                     <li><strong>Extensions:</strong></li>
                     <ul style="margin-left: 20px;">
-                        <li>Sockets: ${info.requirements?.extensions?.sockets ? '✓ Available' : '✗ Missing'}</li>
-                        <li>CURL: ${info.requirements?.extensions?.curl ? '✓ Available' : '✗ Missing'}</li>
-                        <li>SNMP: ${info.requirements?.extensions?.snmp ? '✓ Available' : '✗ Missing'} (Optional)</li>
+                        <li>Sockets: ${requirements.extensions?.sockets ? '✓ Available' : '✗ Missing'}</li>
+                        <li>CURL: ${requirements.extensions?.curl ? '✓ Available' : '✗ Missing'}</li>
+                        <li>JSON: ${requirements.extensions?.json ? '✓ Available' : '✗ Missing'}</li>
+                    </ul>
+                    <li><strong>Required Functions:</strong></li>
+                    <ul style="margin-left: 20px;">
+                        <li>shell_exec: ${requirements.functions?.shell_exec ? '✓ Enabled' : '✗ Disabled'}</li>
+                        <li>exec: ${requirements.functions?.exec ? '✓ Enabled' : '✗ Disabled'}</li>
+                        <li>fsockopen: ${requirements.functions?.fsockopen ? '✓ Enabled' : '✗ Disabled'}</li>
+                        <li>gethostbyaddr: ${requirements.functions?.gethostbyaddr ? '✓ Enabled' : '✗ Disabled'}</li>
                     </ul>
                     <li><strong>Network Connectivity:</strong></li>
                     <ul style="margin-left: 20px;">
-                        <li>Local IP: ${info.connectivity?.local_ip || 'Unknown'}</li>
-                        <li>Gateway: ${info.connectivity?.gateway || 'Unknown'}</li>
-                        <li>Gateway Ping: ${info.connectivity?.gateway_ping ? '✓ OK' : '✗ Failed'}</li>
-                        <li>Internet: ${info.connectivity?.internet_ping ? '✓ OK' : '✗ Failed'}</li>
+                        <li>Localhost: ${connectivity.localhost ? '✓ OK' : '✗ Failed'}</li>
+                        <li>External: ${connectivity.external ? '✓ OK' : '✗ Failed'}</li>
                     </ul>
                 </ul>
             `;
@@ -756,49 +780,79 @@
         }
         
         /**
-         * Get device history (if available)
+         * Show installation help when backend is not available
          */
-        async function getDeviceHistory(ip) {
-            try {
-                const response = await fetch(`${API_BASE}?endpoint=device&ip=${encodeURIComponent(ip)}`);
-                const data = await response.json();
-                
-                if (data.success) {
-                    return data;
-                } else {
-                    throw new Error(data.error || 'Failed to get device history');
-                }
-            } catch (error) {
-                console.error('Error getting device history:', error);
-                return null;
-            }
+        function showInstallationHelp() {
+            const helpContent = `
+                <div style="max-width: 800px; margin: 0 auto; padding: 40px; background: #f8f9fa; border-radius: 10px; border-left: 5px solid #e74c3c;">
+                    <h3>🔧 PHP Backend Setup Required</h3>
+                    <p><strong>The network scanner requires a PHP backend to perform real network scanning.</strong></p>
+                    
+                    <h4>📋 Quick Setup Instructions:</h4>
+                    <ol style="text-align: left; margin: 20px 0;">
+                        <li><strong>Save PHP File:</strong> Save the "Fixed Network Scanner PHP Backend" as <code>fixed_network_scanner.php</code></li>
+                        <li><strong>Upload to Web Server:</strong> Place both HTML and PHP files in the same directory</li>
+                        <li><strong>Check PHP Version:</strong> Ensure PHP 7.0+ is installed</li>
+                        <li><strong>Enable Functions:</strong> Remove <code>shell_exec</code> and <code>exec</code> from <code>disable_functions</code> in php.ini</li>
+                        <li><strong>Test Backend:</strong> Visit <code>fixed_network_scanner.php?endpoint=status</code> to check status</li>
+                    </ol>
+                    
+                    <h4>🔍 Test URLs:</h4>
+                    <p>Try these URLs to test your backend:</p>
+                    <ul style="text-align: left; margin: 20px 0;">
+                        <li><a href="fixed_network_scanner.php?endpoint=status" target="_blank">fixed_network_scanner.php?endpoint=status</a> - System status</li>
+                        <li><a href="fixed_network_scanner.php?endpoint=scan&subnet=192.168.1" target="_blank">fixed_network_scanner.php?endpoint=scan&subnet=192.168.1</a> - Test scan</li>
+                        <li><a href="fixed_network_scanner.php?endpoint=test" target="_blank">fixed_network_scanner.php?endpoint=test</a> - Connectivity test</li>
+                    </ul>
+                    
+                    <h4>🛠 Common Issues:</h4>
+                    <ul style="text-align: left; margin: 20px 0;">
+                        <li><strong>500 Error:</strong> Check PHP syntax and server error logs</li>
+                        <li><strong>Blank Page:</strong> Enable error reporting or check for fatal PHP errors</li>
+                        <li><strong>Function Disabled:</strong> Enable shell_exec/exec in php.ini</li>
+                        <li><strong>Permission Denied:</strong> Ensure web server has proper file permissions</li>
+                        <li><strong>CORS Issues:</strong> Backend includes CORS headers, but check server configuration</li>
+                    </ul>
+                    
+                    <p style="margin-top: 30px;">
+                        <strong>Need Help?</strong> Check your web server error logs for detailed error messages.
+                        The backend should return JSON responses for all endpoints.
+                    </p>
+                </div>
+            `;
+            
+            document.getElementById('devicesContainer').innerHTML = helpContent;
         }
         
-        /**
-         * Test network connectivity
-         */
-        async function testConnectivity() {
-            try {
-                const response = await fetch(`${API_BASE}?endpoint=test`);
-                const data = await response.json();
-                
-                if (data.success) {
-                    window.systemInfo.connectivity = data.connectivity_test;
-                    if (document.getElementById('systemInfo').style.display === 'block') {
-                        displaySystemInfo();
-                    }
-                } else {
-                    throw new Error(data.error || 'Connectivity test failed');
-                }
-            } catch (error) {
-                console.error('Connectivity test error:', error);
-                showError('Connectivity test failed: ' + error.message);
+        // Handle keyboard shortcuts
+        document.addEventListener('keydown', function(event) {
+            // Ctrl+R or F5 for refresh
+            if ((event.ctrlKey && event.key === 'r') || event.key === 'F5') {
+                event.preventDefault();
+                refreshData();
             }
-        }
+            
+            // Ctrl+S for scan
+            if (event.ctrlKey && event.key === 's') {
+                event.preventDefault();
+                startNetworkScan();
+            }
+            
+            // Escape to hide system info and errors
+            if (event.key === 'Escape') {
+                document.getElementById('systemInfo').style.display = 'none';
+                hideError();
+            }
+        });
         
-        /**
-         * Auto-refresh functionality
-         */
+        // Handle subnet input Enter key
+        document.getElementById('subnetInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                startNetworkScan();
+            }
+        });
+        
+        // Auto-refresh functionality
         let autoRefreshInterval = null;
         
         function startAutoRefresh(intervalMinutes = 5) {
@@ -824,78 +878,10 @@
         // Start auto-refresh when page loads
         startAutoRefresh(5); // 5 minutes
         
-        // Handle keyboard shortcuts
-        document.addEventListener('keydown', function(event) {
-            // Ctrl+R or F5 for refresh
-            if ((event.ctrlKey && event.key === 'r') || event.key === 'F5') {
-                event.preventDefault();
-                refreshData();
-            }
-            
-            // Ctrl+S for scan
-            if (event.ctrlKey && event.key === 's') {
-                event.preventDefault();
-                startRealNetworkScan();
-            }
-            
-            // Escape to hide system info
-            if (event.key === 'Escape') {
-                document.getElementById('systemInfo').style.display = 'none';
-                hideError();
-            }
-        });
-        
-        // Handle subnet input Enter key
-        document.getElementById('subnetInput').addEventListener('keypress', function(event) {
-            if (event.key === 'Enter') {
-                startRealNetworkScan();
-            }
-        });
-        
         // Cleanup on page unload
         window.addEventListener('beforeunload', function() {
             stopAutoRefresh();
         });
-        
-        // Show installation instructions if backend is not available
-        function showInstallationHelp() {
-            const helpContent = `
-                <div style="max-width: 800px; margin: 0 auto; padding: 40px; background: #f8f9fa; border-radius: 10px; border-left: 5px solid #e74c3c;">
-                    <h3>🔧 PHP Backend Setup Required</h3>
-                    <p><strong>The network scanner requires a PHP backend to perform real network scanning.</strong></p>
-                    
-                    <h4>📋 Quick Setup Instructions:</h4>
-                    <ol style="text-align: left; margin: 20px 0;">
-                        <li><strong>Download PHP Files:</strong> Save the provided PHP files to your web server</li>
-                        <li><strong>Check PHP Version:</strong> Ensure PHP 7.0+ is installed</li>
-                        <li><strong>Enable Functions:</strong> Remove <code>shell_exec</code> and <code>exec</code> from <code>disable_functions</code> in php.ini</li>
-                        <li><strong>Set Permissions:</strong> Make sure the web server can execute the files</li>
-                    </ol>
-                    
-                    <h4>🧪 Test Your Setup:</h4>
-                    <p>Try these URLs to test your backend:</p>
-                    <ul style="text-align: left; margin: 20px 0;">
-                        <li><a href="test_backend.php" target="_blank">test_backend.php</a> - Basic PHP test</li>
-                        <li><a href="simple_network_scanner.php?debug=1" target="_blank">simple_network_scanner.php?debug=1</a> - Debug info</li>
-                        <li><a href="simple_network_scanner.php?endpoint=status" target="_blank">simple_network_scanner.php?endpoint=status</a> - Status check</li>
-                    </ul>
-                    
-                    <h4>🐛 Common Issues:</h4>
-                    <ul style="text-align: left; margin: 20px 0;">
-                        <li><strong>500 Error:</strong> Check PHP syntax errors in server logs</li>
-                        <li><strong>Blank Page:</strong> Enable error reporting in PHP</li>
-                        <li><strong>JSON Parse Error:</strong> PHP is outputting HTML instead of JSON</li>
-                        <li><strong>Function Disabled:</strong> Enable shell_exec/exec functions</li>
-                    </ul>
-                    
-                    <p style="margin-top: 30px;">
-                        <strong>Need Help?</strong> Check your web server error logs for detailed error messages.
-                    </p>
-                </div>
-            `;
-            
-            document.getElementById('devicesContainer').innerHTML = helpContent;
-        }
     </script>
 </body>
 </html>

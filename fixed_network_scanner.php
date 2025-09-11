@@ -19,7 +19,7 @@ ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 
 class NetworkScanner {
-    private $subnet;
+    private $ipAddress;
     private $timeout = 1;
     private $vendors = [
         '001B63' => 'Apple', '001EC2' => 'Apple', '002608' => 'Apple',
@@ -41,12 +41,12 @@ class NetworkScanner {
         'A020A6' => 'Samsung', '001D25' => 'Samsung', '002332' => 'Samsung'
     ];
     
-    public function __construct($subnet = '192.168.1') {
+    public function __construct($ipAddress = '192.168.1') {
         // Validate subnet format
-        if (!preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}$/', $subnet)) {
+        if (!preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}$/', $ipAddress)) {
             throw new InvalidArgumentException('Invalid subnet format');
         }
-        $this->subnet = $subnet;
+        $this->ipAddress = $ipAddress;
     }
     
     public function scan() {
@@ -75,7 +75,7 @@ class NetworkScanner {
             
             // Scan each IP
             foreach ($ipsToScan as $lastOctet) {
-                $ip = "{$this->subnet}.{$lastOctet}";
+                $ip = "{$this->ipAddress}.{$lastOctet}";
                 
                 if ($this->pingHost($ip)) {
                     $device = $this->scanDevice($ip);
@@ -96,14 +96,14 @@ class NetworkScanner {
                 'success' => true,
                 'scan_time' => date('Y-m-d H:i:s'),
                 'duration' => $scanTime . 's',
-                'subnet' => $this->subnet . '.0/24',
+                'subnet' => $this->ipAddress . '.0/24',
                 'total_devices' => count($devices),
                 'switches' => $this->countDevicesByType($devices, 'switch'),
                 'devices' => $devices,
                 'network_info' => [
                     'local_ip' => $localIP,
                     'gateway' => $gateway,
-                    'subnet' => $this->subnet
+                    'subnet' => $this->ipAddress 
                 ]
             ];
             
@@ -300,7 +300,7 @@ class NetworkScanner {
             $device['powerConsumption'] = rand(40, 120) . 'W';
         }
         // Check for router/gateway
-        elseif ($ip === $this->subnet . '.1' || 
+        elseif ($ip === $this->ipAddress . '.1' || 
                 strpos($hostname, 'router') !== false || 
                 strpos($hostname, 'gateway') !== false) {
             $device['device_type'] = '📶';

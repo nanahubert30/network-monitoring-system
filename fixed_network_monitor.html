@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Network Traffic Monitor - Fixed Version</title>
+    <title>Network Traffic Monitor</title>
     <style>
         * {
             margin: 0;
@@ -81,7 +81,7 @@
             flex-wrap: wrap;
         }
         
-        .subnet-input {
+        .ipAddress-input {
             padding: 10px 15px;
             border: 2px solid #ddd;
             border-radius: 25px;
@@ -90,7 +90,7 @@
             width: 200px;
         }
         
-        .subnet-input:focus {
+        .ipAddress-input:focus {
             border-color: #667eea;
         }
         
@@ -361,7 +361,7 @@
                 grid-template-columns: 1fr;
             }
             
-            .subnet-input {
+            .ipAddress-input {
                 width: 100%;
                 max-width: 300px;
             }
@@ -380,7 +380,7 @@
         </div>
         
         <div class="controls">
-            <input type="text" class="subnet-input" id="subnetInput" placeholder="Enter subnet (e.g., 192.168.1)" value="192.168.1">
+            <input type="text" class="ipAddress-input" id="ipAddressInput" placeholder="Enter ipAddress (e.g., 192.168.1)" value="192.168.1">
             <button class="scan-btn" id="scanBtn" onclick="startNetworkScan()">🔍 Scan Network</button>
             <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">🔄 Refresh</button>
             <button class="status-btn" onclick="toggleSystemInfo()">📊 System Status</button>
@@ -479,15 +479,15 @@
         async function startNetworkScan() {
             if (scanning) return;
             
-            const subnet = document.getElementById('subnetInput').value.trim();
-            if (!subnet) {
-                showError('Please enter a subnet (e.g., 192.168.1)');
+            const ipAddress = document.getElementById('ipAddressInput').value.trim();
+            if (!ipAddress) {
+                showError('Please enter a ipAddress (e.g., 192.168.1)');
                 return;
             }
             
-            // Validate subnet format
-            if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(subnet)) {
-                showError('Invalid subnet format. Use format like: 192.168.1');
+            // Validate ipAddress format
+            if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ipAddress)) {
+                showError('Invalid ipAddress format. Use format like: 192.168.1');
                 return;
             }
             
@@ -499,7 +499,7 @@
             try {
                 updateScanProgress('Initializing scan...');
                 
-                const response = await fetch(`${API_BASE}?endpoint=scan&subnet=${encodeURIComponent(subnet)}`);
+                const response = await fetch(`${API_BASE}?endpoint=scan&ipAddress=${encodeURIComponent(ipAddress)}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -512,7 +512,7 @@
                     updateDisplay(data);
                     
                     document.getElementById('status').textContent = 
-                        `Scan completed in ${data.duration || 'unknown time'}! Found ${data.total_devices} devices on ${data.subnet}`;
+                        `Scan completed in ${data.duration || 'unknown time'}! Found ${data.total_devices} devices on ${data.ipAddress || 'the network'}.`;
                 } else {
                     throw new Error(data.error || 'Scan failed');
                 }
@@ -557,7 +557,7 @@
         function disableControls() {
             document.getElementById('scanBtn').disabled = true;
             document.getElementById('refreshBtn').disabled = true;
-            document.getElementById('subnetInput').disabled = true;
+            document.getElementById('ipAddressInput').disabled = true;
         }
         
         /**
@@ -566,7 +566,7 @@
         function enableControls() {
             document.getElementById('scanBtn').disabled = false;
             document.getElementById('refreshBtn').disabled = false;
-            document.getElementById('subnetInput').disabled = false;
+            document.getElementById('ipAddressInput').disabled = false;
         }
         
         /**
@@ -710,8 +710,8 @@
          */
         function refreshData() {
             if (!scanning) {
-                const subnet = document.getElementById('subnetInput').value.trim();
-                if (subnet) {
+                const ipAddress = document.getElementById('ipAddressInput').value.trim();
+                if (ipAddress) {
                     startNetworkScan();
                 } else {
                     checkSystemStatus();
@@ -801,7 +801,7 @@
                     <p>Try these URLs to test your backend:</p>
                     <ul style="text-align: left; margin: 20px 0;">
                         <li><a href="fixed_network_scanner.php?endpoint=status" target="_blank">fixed_network_scanner.php?endpoint=status</a> - System status</li>
-                        <li><a href="fixed_network_scanner.php?endpoint=scan&subnet=192.168.1" target="_blank">fixed_network_scanner.php?endpoint=scan&subnet=192.168.1</a> - Test scan</li>
+                        <li><a href="fixed_network_scanner.php?endpoint=scan&ipAddress=192.168.1" target="_blank">fixed_network_scanner.php?endpoint=scan&ipAddress=192.168.1</a> - Test scan</li>
                         <li><a href="fixed_network_scanner.php?endpoint=test" target="_blank">fixed_network_scanner.php?endpoint=test</a> - Connectivity test</li>
                     </ul>
                     
@@ -845,8 +845,8 @@
             }
         });
         
-        // Handle subnet input Enter key
-        document.getElementById('subnetInput').addEventListener('keypress', function(event) {
+        // Handle ipAddress input Enter key
+        document.getElementById('ipAddressInput').addEventListener('keypress', function(event) {
             if (event.key === 'Enter') {
                 startNetworkScan();
             }

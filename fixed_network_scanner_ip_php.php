@@ -1,5 +1,5 @@
 <?php
-// fixed_network_scanner.php - Corrected network scanner with proper error handling
+// fixed_network_scanner_ip.php - Network scanner accepting full IP addresses
 
 // Set proper headers first
 header('Content-Type: application/json');
@@ -19,7 +19,7 @@ ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 
 class NetworkScanner {
-    private $ipAddress;
+    private $targetIP;
     private $timeout = 1;
     private $vendors = [
         '001B63' => 'Apple', '001EC2' => 'Apple', '002608' => 'Apple',
@@ -41,12 +41,12 @@ class NetworkScanner {
         'A020A6' => 'Samsung', '001D25' => 'Samsung', '002332' => 'Samsung'
     ];
     
-    public function __construct($ipAddress = '192.168.1') {
-        // Validate subnet format
-        if (!preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}$/', $ipAddress)) {
-            throw new InvalidArgumentException('Invalid subnet format');
+    public function __construct($ip) {
+        // Validate full IP address
+        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+            throw new InvalidArgumentException('Invalid IP address format: ' . $ip);
         }
-        $this->ipAddress = $ipAddress;
+        $this->targetIP = $ip;
     }
     
     public function scan() {
@@ -58,32 +58,22 @@ class NetworkScanner {
             $localIP = $this->getLocalIP();
             $gateway = $this->getGateway();
             
-            // Define IP ranges to scan
-            $ipsToScan = array_merge(
-                range(1, 10),      // Common router/gateway IPs
-                range(100, 120),   // Common DHCP range
-                range(254, 254)    // Common static IPs
-            );
+            // Extract network from the target IP (assume /24 subnet)
+            $networkParts = explode('.', $this->targetIP);
+            $networkBase = $networkParts[0] . '.' . $networkParts[1] . '.' . $networkParts[2];
             
-            // Add local IP to scan list if not already included
-            if ($localIP) {
-                $localLastOctet = (int)substr($localIP, strrpos($localIP, '.') + 1);
-                if (!in_array($localLastOctet, $ipsToScan)) {
-                    $ipsToScan[] = $localLastOctet;
-                }
-            }
-            
-            // Scan each IP
-            foreach ($ipsToScan as $lastOctet) {
-                $ip = "{$this->ipAddress}.{$lastOctet}";
-                
+            // Scan the /24 network
+            for ($i = 1; $i <= 254; $i++) {
+                $ip = "$networkBase.$i";
                 if ($this->pingHost($ip)) {
                     $device = $this->scanDevice($ip);
                     if ($device) {
-                        // Mark local device
                         if ($ip === $localIP) {
                             $device['name'] = 'This Computer (Local)';
                             $device['is_local'] = true;
+                        } elseif ($ip === $this->targetIP) {
+                            $device['name'] = $device['name'] . ' (Target)';
+                            $device['is_target'] = true;
                         }
                         $devices[] = $device;
                     }
@@ -96,14 +86,16 @@ class NetworkScanner {
                 'success' => true,
                 'scan_time' => date('Y-m-d H:i:s'),
                 'duration' => $scanTime . 's',
-                'subnet' => $this->ipAddress . '.0/24',
+                'network' => $networkBase . '.0/24',
+                'target_ip' => $this->targetIP,
                 'total_devices' => count($devices),
                 'switches' => $this->countDevicesByType($devices, 'switch'),
                 'devices' => $devices,
                 'network_info' => [
                     'local_ip' => $localIP,
                     'gateway' => $gateway,
-                    'subnet' => $this->ipAddress 
+                    'target_ip' => $this->targetIP,
+                    'scanned_network' => $networkBase . '.0/24'
                 ]
             ];
             
@@ -160,7 +152,8 @@ class NetworkScanner {
                 'open_ports' => [],
                 'response_time' => null,
                 'last_seen' => date('Y-m-d H:i:s'),
-                'is_local' => false
+                'is_local' => false,
+                'is_target' => false
             ];
             
             // Get hostname
@@ -286,6 +279,8 @@ class NetworkScanner {
         $ports = $device['open_ports'];
         $hostname = strtolower($device['hostname'] ?? '');
         $ip = $device['ip'];
+        $networkParts = explode('.', $this->targetIP);
+        $gatewayIP = $networkParts[0] . '.' . $networkParts[1] . '.' . $networkParts[2] . '.1';
         
         // Check for network switch (SNMP + SSH/Telnet)
         if (in_array(161, $ports) && (in_array(23, $ports) || in_array(22, $ports))) {
@@ -300,7 +295,7 @@ class NetworkScanner {
             $device['powerConsumption'] = rand(40, 120) . 'W';
         }
         // Check for router/gateway
-        elseif ($ip === $this->ipAddress . '.1' || 
+        elseif ($ip === $gatewayIP || 
                 strpos($hostname, 'router') !== false || 
                 strpos($hostname, 'gateway') !== false) {
             $device['device_type'] = '📶';
@@ -539,14 +534,14 @@ try {
             break;
             
         case 'scan':
-            $subnet = $_GET['subnet'] ?? '192.168.1';
+            $ip = $_GET['ip'] ?? '192.168.1.1';
             
-            // Validate subnet
-            if (!preg_match('/^\d{1,3}\.\d{1,3}\.\d{1,3}$/', $subnet)) {
-                throw new InvalidArgumentException('Invalid subnet format. Use format like: 192.168.1');
+            // Validate IP address
+            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+                throw new InvalidArgumentException('Invalid IP address format. Use format like: 192.168.1.1');
             }
             
-            $scanner = new NetworkScanner($subnet);
+            $scanner = new NetworkScanner($ip);
             $result = $scanner->scan();
             break;
             

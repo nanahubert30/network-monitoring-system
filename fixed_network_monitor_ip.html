@@ -81,16 +81,16 @@
             flex-wrap: wrap;
         }
         
-        .ipAddress-input {
+        .ip-input {
             padding: 10px 15px;
             border: 2px solid #ddd;
             border-radius: 25px;
             outline: none;
             font-size: 16px;
-            width: 200px;
+            width: 220px;
         }
         
-        .ipAddress-input:focus {
+        .ip-input:focus {
             border-color: #667eea;
         }
         
@@ -361,7 +361,7 @@
                 grid-template-columns: 1fr;
             }
             
-            .ipAddress-input {
+            .ip-input {
                 width: 100%;
                 max-width: 300px;
             }
@@ -380,7 +380,7 @@
         </div>
         
         <div class="controls">
-            <input type="text" class="ipAddress-input" id="ipAddressInput" placeholder="Enter ipAddress (e.g., 192.168.1)" value="192.168.1">
+            <input type="text" class="ip-input" id="ipInput" placeholder="Enter IP address (e.g., 192.168.1.1)" value="192.168.1.1">
             <button class="scan-btn" id="scanBtn" onclick="startNetworkScan()">🔍 Scan Network</button>
             <button class="refresh-btn" id="refreshBtn" onclick="refreshData()">🔄 Refresh</button>
             <button class="status-btn" onclick="toggleSystemInfo()">📊 System Status</button>
@@ -435,17 +435,12 @@
     <script>
         let networkDevices = [];
         let scanning = false;
-        // Update this path to match your PHP file location
-        const API_BASE = 'fixed_network_scanner.php';
+        const API_BASE = 'fixed_network_scanner_ip.php';
 
-        // Initialize the application
         document.addEventListener('DOMContentLoaded', function() {
             checkSystemStatus();
         });
 
-        /**
-         * Check system status and connectivity
-         */
         async function checkSystemStatus() {
             try {
                 const response = await fetch(`${API_BASE}?endpoint=status`);
@@ -460,7 +455,6 @@
                     document.getElementById('systemStatus').className = 'status-indicator status-online';
                     document.getElementById('systemStatusText').textContent = 'System Ready';
                     
-                    // Store system info for display
                     window.systemInfo = data;
                 } else {
                     throw new Error(data.error || 'System check failed');
@@ -473,21 +467,18 @@
             }
         }
 
-        /**
-         * Start network scan using PHP backend
-         */
         async function startNetworkScan() {
             if (scanning) return;
             
-            const ipAddress = document.getElementById('ipAddressInput').value.trim();
-            if (!ipAddress) {
-                showError('Please enter a ipAddress (e.g., 192.168.1)');
+            const ipInput = document.getElementById('ipInput').value.trim();
+            if (!ipInput) {
+                showError('Please enter an IP address (e.g., 192.168.1.1)');
                 return;
             }
             
-            // Validate ipAddress format
-            if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ipAddress)) {
-                showError('Invalid ipAddress format. Use format like: 192.168.1');
+            // Validate IP address format
+            if (!isValidIP(ipInput)) {
+                showError('Invalid IP address format. Use format like: 192.168.1.1');
                 return;
             }
             
@@ -499,7 +490,7 @@
             try {
                 updateScanProgress('Initializing scan...');
                 
-                const response = await fetch(`${API_BASE}?endpoint=scan&ipAddress=${encodeURIComponent(ipAddress)}`);
+                const response = await fetch(`${API_BASE}?endpoint=scan&ip=${encodeURIComponent(ipInput)}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -512,7 +503,7 @@
                     updateDisplay(data);
                     
                     document.getElementById('status').textContent = 
-                        `Scan completed in ${data.duration || 'unknown time'}! Found ${data.total_devices} devices on ${data.ipAddress || 'the network'}.`;
+                        `Scan completed in ${data.duration || 'unknown time'}! Found ${data.total_devices} devices on ${data.network || 'the network'}.`;
                 } else {
                     throw new Error(data.error || 'Scan failed');
                 }
@@ -527,75 +518,53 @@
             }
         }
         
-        /**
-         * Update scan progress message
-         */
+        function isValidIP(ip) {
+            const ipRegex = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+            return ipRegex.test(ip);
+        }
+        
         function updateScanProgress(message) {
             document.getElementById('scanProgress').textContent = message;
         }
         
-        /**
-         * Show loading state
-         */
         function showLoading() {
             document.getElementById('loading').style.display = 'block';
             document.getElementById('status').style.display = 'none';
             document.getElementById('stats').style.display = 'none';
         }
         
-        /**
-         * Hide loading state
-         */
         function hideLoading() {
             document.getElementById('loading').style.display = 'none';
             document.getElementById('status').style.display = 'block';
         }
         
-        /**
-         * Disable control buttons during scan
-         */
         function disableControls() {
             document.getElementById('scanBtn').disabled = true;
             document.getElementById('refreshBtn').disabled = true;
-            document.getElementById('ipAddressInput').disabled = true;
+            document.getElementById('ipInput').disabled = true;
         }
         
-        /**
-         * Enable control buttons after scan
-         */
         function enableControls() {
             document.getElementById('scanBtn').disabled = false;
             document.getElementById('refreshBtn').disabled = false;
-            document.getElementById('ipAddressInput').disabled = false;
+            document.getElementById('ipInput').disabled = false;
         }
         
-        /**
-         * Show error message
-         */
         function showError(message) {
             document.getElementById('errorText').textContent = message;
             document.getElementById('errorMessage').style.display = 'block';
         }
         
-        /**
-         * Hide error message
-         */
         function hideError() {
             document.getElementById('errorMessage').style.display = 'none';
         }
         
-        /**
-         * Update the display with scan results
-         */
         function updateDisplay(scanData) {
             updateStats(scanData);
             displayDevices();
             document.getElementById('stats').style.display = 'grid';
         }
         
-        /**
-         * Update statistics display
-         */
         function updateStats(scanData) {
             const totalDevices = networkDevices.length;
             const switchCount = networkDevices.filter(d => d.deviceCategory === 'switch').length;
@@ -610,9 +579,6 @@
             document.getElementById('lastScan').textContent = scanTime;
         }
         
-        /**
-         * Display devices in the grid
-         */
         function displayDevices() {
             const container = document.getElementById('devicesContainer');
             
@@ -621,7 +587,6 @@
                 return;
             }
             
-            // Sort devices: switches first, then by IP
             const sortedDevices = [...networkDevices].sort((a, b) => {
                 if (a.deviceCategory === 'switch' && b.deviceCategory !== 'switch') return -1;
                 if (a.deviceCategory !== 'switch' && b.deviceCategory === 'switch') return 1;
@@ -705,13 +670,10 @@
             container.innerHTML = `<div class="devices-grid">${devicesHTML}</div>`;
         }
         
-        /**
-         * Refresh current data
-         */
         function refreshData() {
             if (!scanning) {
-                const ipAddress = document.getElementById('ipAddressInput').value.trim();
-                if (ipAddress) {
+                const ip = document.getElementById('ipInput').value.trim();
+                if (ip) {
                     startNetworkScan();
                 } else {
                     checkSystemStatus();
@@ -719,9 +681,6 @@
             }
         }
         
-        /**
-         * Toggle system information display
-         */
         function toggleSystemInfo() {
             const systemInfoDiv = document.getElementById('systemInfo');
             const isVisible = systemInfoDiv.style.display === 'block';
@@ -734,9 +693,6 @@
             }
         }
         
-        /**
-         * Display system information
-         */
         function displaySystemInfo() {
             if (!window.systemInfo) {
                 document.getElementById('systemInfoContent').innerHTML = 'System information not available';
@@ -779,9 +735,6 @@
             document.getElementById('systemInfoContent').innerHTML = content;
         }
         
-        /**
-         * Show installation help when backend is not available
-         */
         function showInstallationHelp() {
             const helpContent = `
                 <div style="max-width: 800px; margin: 0 auto; padding: 40px; background: #f8f9fa; border-radius: 10px; border-left: 5px solid #e74c3c;">
@@ -790,19 +743,19 @@
                     
                     <h4>📋 Quick Setup Instructions:</h4>
                     <ol style="text-align: left; margin: 20px 0;">
-                        <li><strong>Save PHP File:</strong> Save the "Fixed Network Scanner PHP Backend" as <code>fixed_network_scanner.php</code></li>
+                        <li><strong>Save PHP File:</strong> Save the updated PHP backend as <code>fixed_network_scanner_ip.php</code></li>
                         <li><strong>Upload to Web Server:</strong> Place both HTML and PHP files in the same directory</li>
                         <li><strong>Check PHP Version:</strong> Ensure PHP 7.0+ is installed</li>
                         <li><strong>Enable Functions:</strong> Remove <code>shell_exec</code> and <code>exec</code> from <code>disable_functions</code> in php.ini</li>
-                        <li><strong>Test Backend:</strong> Visit <code>fixed_network_scanner.php?endpoint=status</code> to check status</li>
+                        <li><strong>Test Backend:</strong> Visit <code>fixed_network_scanner_ip.php?endpoint=status</code> to check status</li>
                     </ol>
                     
                     <h4>🔍 Test URLs:</h4>
                     <p>Try these URLs to test your backend:</p>
                     <ul style="text-align: left; margin: 20px 0;">
-                        <li><a href="fixed_network_scanner.php?endpoint=status" target="_blank">fixed_network_scanner.php?endpoint=status</a> - System status</li>
-                        <li><a href="fixed_network_scanner.php?endpoint=scan&ipAddress=192.168.1" target="_blank">fixed_network_scanner.php?endpoint=scan&ipAddress=192.168.1</a> - Test scan</li>
-                        <li><a href="fixed_network_scanner.php?endpoint=test" target="_blank">fixed_network_scanner.php?endpoint=test</a> - Connectivity test</li>
+                        <li><a href="fixed_network_scanner_ip.php?endpoint=status" target="_blank">fixed_network_scanner_ip.php?endpoint=status</a> - System status</li>
+                        <li><a href="fixed_network_scanner_ip.php?endpoint=scan&ip=192.168.1.1" target="_blank">fixed_network_scanner_ip.php?endpoint=scan&ip=192.168.1.1</a> - Test scan</li>
+                        <li><a href="fixed_network_scanner_ip.php?endpoint=test" target="_blank">fixed_network_scanner_ip.php?endpoint=test</a> - Connectivity test</li>
                     </ul>
                     
                     <h4>🛠 Common Issues:</h4>
@@ -824,7 +777,6 @@
             document.getElementById('devicesContainer').innerHTML = helpContent;
         }
         
-        // Handle keyboard shortcuts
         document.addEventListener('keydown', function(event) {
             // Ctrl+R or F5 for refresh
             if ((event.ctrlKey && event.key === 'r') || event.key === 'F5') {
@@ -845,8 +797,8 @@
             }
         });
         
-        // Handle ipAddress input Enter key
-        document.getElementById('ipAddressInput').addEventListener('keypress', function(event) {
+        // Handle IP input Enter key
+        document.getElementById('ipInput').addEventListener('keypress', function(event) {
             if (event.key === 'Enter') {
                 startNetworkScan();
             }
@@ -882,6 +834,3 @@
         window.addEventListener('beforeunload', function() {
             stopAutoRefresh();
         });
-    </script>
-</body>
-</html>

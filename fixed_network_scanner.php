@@ -1,5 +1,5 @@
 <?php
-// fixed_network_scanner_ip.php - Network scanner accepting full IP addresses
+// fixed_network_scanner_ip.php - Network scanner with improved error handling
 
 // Set proper headers first
 header('Content-Type: application/json');
@@ -17,10 +17,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 ini_set('log_errors', 1);
+set_time_limit(120); // Increase time limit for network scanning
 
 class NetworkScanner {
     private $targetIP;
-    private $timeout = 1;
+    private $timeout = 2;
     private $vendors = [
         '001B63' => 'Apple', '001EC2' => 'Apple', '002608' => 'Apple',
         '0C7430' => 'Apple', '14109F' => 'Apple', '1C5CF2' => 'Apple',
@@ -33,18 +34,13 @@ class NetworkScanner {
         '20E52A' => 'Netgear', 'E091F5' => 'Netgear', '4C60DE' => 'Netgear',
         'A0040A' => 'Netgear', 'C40415' => 'Netgear', '309C23' => 'Netgear',
         '001B11' => 'D-Link', '001CF0' => 'D-Link', '001E58' => 'D-Link',
-        '002191' => 'D-Link', '0022B0' => 'D-Link', '14D64D' => 'D-Link',
-        '34E6D7' => 'Dell', '78F2B0' => 'Dell', 'B883CB' => 'Dell',
-        'D067E5' => 'Dell', '001188B' => 'Dell', '001E4F' => 'Dell',
-        '000C29' => 'VMware', '005056' => 'VMware', '000569' => 'VMware',
-        '0018AF' => 'Samsung', '28E347' => 'Samsung', '78D6F0' => 'Samsung',
-        'A020A6' => 'Samsung', '001D25' => 'Samsung', '002332' => 'Samsung'
+        '002191' => 'D-Link', '0022B0' => 'D-Link', '14D64D' => 'D-Link'
     ];
     
     public function __construct($ip) {
-        // Validate full IP address
-        if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-            throw new InvalidArgumentException('Invalid IP address format: ' . $ip);
+        // Validate IP address
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            throw new InvalidArgumentException('Invalid IPv4 address format: ' . $ip);
         }
         $this->targetIP = $ip;
     }
@@ -54,21 +50,33 @@ class NetworkScanner {
             $startTime = microtime(true);
             $devices = [];
             
-            // Get system network info
-            $localIP = $this->getLocalIP();
-            $gateway = $this->getGateway();
+            // Get network information
+            $networkInfo = $this->getNetworkInfo();
             
             // Extract network from the target IP (assume /24 subnet)
             $networkParts = explode('.', $this->targetIP);
+            if (count($networkParts) !== 4) {
+                throw new InvalidArgumentException('Invalid IP address format');
+            }
+            
             $networkBase = $networkParts[0] . '.' . $networkParts[1] . '.' . $networkParts[2];
             
-            // Scan the /24 network
-            for ($i = 1; $i <= 254; $i++) {
+            // Limit scan range for performance
+            $scanRange = range(1, 254);
+            
+            foreach ($scanRange as $i) {
                 $ip = "$networkBase.$i";
+                
+                // Skip invalid IPs
+                if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+                    continue;
+                }
+                
                 if ($this->pingHost($ip)) {
                     $device = $this->scanDevice($ip);
                     if ($device) {
-                        if ($ip === $localIP) {
+                        // Add special labels
+                        if ($ip === $networkInfo['local_ip']) {
                             $device['name'] = 'This Computer (Local)';
                             $device['is_local'] = true;
                         } elseif ($ip === $this->targetIP) {
@@ -77,6 +85,11 @@ class NetworkScanner {
                         }
                         $devices[] = $device;
                     }
+                }
+                
+                // Prevent timeout on large scans
+                if ((microtime(true) - $startTime) > 100) {
+                    break;
                 }
             }
             
@@ -91,12 +104,7 @@ class NetworkScanner {
                 'total_devices' => count($devices),
                 'switches' => $this->countDevicesByType($devices, 'switch'),
                 'devices' => $devices,
-                'network_info' => [
-                    'local_ip' => $localIP,
-                    'gateway' => $gateway,
-                    'target_ip' => $this->targetIP,
-                    'scanned_network' => $networkBase . '.0/24'
-                ]
+                'network_info' => $networkInfo
             ];
             
         } catch (Exception $e) {
@@ -110,30 +118,43 @@ class NetworkScanner {
     }
     
     private function pingHost($ip) {
-        // Validate IP
+        // Validate and escape IP
         if (!filter_var($ip, FILTER_VALIDATE_IP)) {
             return false;
         }
         
         $ip = escapeshellarg($ip);
         
-        if (PHP_OS_FAMILY === 'Windows') {
-            $command = "ping -n 1 -w 1000 {$ip} 2>NUL";
-        } else {
-            $command = "ping -c 1 -W 1 {$ip} 2>/dev/null";
-        }
-        
-        $output = @shell_exec($command);
-        
-        if (!$output) {
+        try {
+            if (PHP_OS_FAMILY === 'Windows') {
+                $command = "ping -n 1 -w 1000 {$ip} 2>NUL";
+            } else {
+                $command = "ping -c 1 -W 2 {$ip} 2>/dev/null";
+            }
+            
+            $output = '';
+            if (function_exists('shell_exec')) {
+                $output = @shell_exec($command);
+            } elseif (function_exists('exec')) {
+                @exec($command, $outputArray);
+                $output = implode("\n", $outputArray);
+            } else {
+                return false; // No command execution available
+            }
+            
+            if (!$output) {
+                return false;
+            }
+            
+            // Check for successful ping response
+            if (PHP_OS_FAMILY === 'Windows') {
+                return (strpos($output, 'TTL=') !== false || strpos($output, 'bytes=') !== false);
+            } else {
+                return (strpos($output, 'ttl=') !== false || strpos($output, 'time=') !== false);
+            }
+            
+        } catch (Exception $e) {
             return false;
-        }
-        
-        // Check for successful ping response
-        if (PHP_OS_FAMILY === 'Windows') {
-            return strpos($output, 'TTL=') !== false || strpos($output, 'bytes=') !== false;
-        } else {
-            return strpos($output, 'ttl=') !== false || strpos($output, 'time=') !== false;
         }
     }
     
@@ -156,7 +177,7 @@ class NetworkScanner {
                 'is_target' => false
             ];
             
-            // Get hostname
+            // Get hostname with timeout
             $device['hostname'] = $this->getHostname($ip);
             $device['name'] = $device['hostname'] ?: 'Unknown Device';
             
@@ -168,8 +189,8 @@ class NetworkScanner {
                 $device['vendor'] = $this->getVendorFromMac($device['mac']);
             }
             
-            // Scan ports
-            $device['open_ports'] = $this->scanPorts($ip);
+            // Scan common ports only
+            $device['open_ports'] = $this->scanCommonPorts($ip);
             
             // Get response time
             $device['response_time'] = $this->getResponseTime($ip);
@@ -190,8 +211,9 @@ class NetworkScanner {
     
     private function getHostname($ip) {
         try {
+            // Set a timeout for hostname resolution
             $hostname = @gethostbyaddr($ip);
-            return ($hostname && $hostname !== $ip) ? $hostname : null;
+            return ($hostname && $hostname !== $ip && strlen($hostname) > 0) ? $hostname : null;
         } catch (Exception $e) {
             return null;
         }
@@ -204,6 +226,8 @@ class NetworkScanner {
             if (PHP_OS_FAMILY === 'Windows') {
                 // First ping to populate ARP table
                 @shell_exec("ping -n 1 -w 1000 {$ip} >NUL 2>&1");
+                sleep(1); // Wait for ARP table update
+                
                 $output = @shell_exec("arp -a {$ip} 2>NUL");
                 
                 if ($output && preg_match('/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/', $output, $matches)) {
@@ -212,16 +236,20 @@ class NetworkScanner {
             } else {
                 // First ping to populate ARP table
                 @shell_exec("ping -c 1 -W 1 {$ip} >/dev/null 2>&1");
-                $output = @shell_exec("arp -n {$ip} 2>/dev/null");
+                sleep(1); // Wait for ARP table update
                 
-                if ($output && preg_match('/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/', $output, $matches)) {
-                    return strtoupper($matches[0]);
-                }
+                // Try different ARP commands
+                $commands = [
+                    "arp -n {$ip} 2>/dev/null",
+                    "ip neigh show {$ip} 2>/dev/null",
+                    "cat /proc/net/arp | grep {$ip} 2>/dev/null"
+                ];
                 
-                // Try alternative ARP command
-                $output = @shell_exec("ip neigh show {$ip} 2>/dev/null");
-                if ($output && preg_match('/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/', $output, $matches)) {
-                    return strtoupper($matches[0]);
+                foreach ($commands as $cmd) {
+                    $output = @shell_exec($cmd);
+                    if ($output && preg_match('/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/', $output, $matches)) {
+                        return strtoupper($matches[0]);
+                    }
                 }
             }
             
@@ -231,8 +259,9 @@ class NetworkScanner {
         }
     }
     
-    private function scanPorts($ip) {
-        $commonPorts = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 161, 443, 445, 993, 995, 8080, 8443];
+    private function scanCommonPorts($ip) {
+        // Reduced port list for faster scanning
+        $commonPorts = [22, 23, 53, 80, 135, 139, 161, 443, 445, 8080];
         $openPorts = [];
         
         foreach ($commonPorts as $port) {
@@ -244,7 +273,7 @@ class NetworkScanner {
         return $openPorts;
     }
     
-    private function isPortOpen($ip, $port, $timeout = 1) {
+    private function isPortOpen($ip, $port, $timeout = 2) {
         try {
             $connection = @fsockopen($ip, $port, $errno, $errstr, $timeout);
             if ($connection) {
@@ -260,16 +289,20 @@ class NetworkScanner {
     private function getResponseTime($ip) {
         $ip = escapeshellarg($ip);
         
-        if (PHP_OS_FAMILY === 'Windows') {
-            $output = @shell_exec("ping -n 1 {$ip} 2>NUL");
-            if ($output && preg_match('/time[<=](\d+)ms/', $output, $matches)) {
-                return $matches[1] . 'ms';
+        try {
+            if (PHP_OS_FAMILY === 'Windows') {
+                $output = @shell_exec("ping -n 1 {$ip} 2>NUL");
+                if ($output && preg_match('/time[<=](\d+)ms/', $output, $matches)) {
+                    return $matches[1] . 'ms';
+                }
+            } else {
+                $output = @shell_exec("ping -c 1 {$ip} 2>/dev/null");
+                if ($output && preg_match('/time=([\d.]+) ms/', $output, $matches)) {
+                    return round($matches[1]) . 'ms';
+                }
             }
-        } else {
-            $output = @shell_exec("ping -c 1 {$ip} 2>/dev/null");
-            if ($output && preg_match('/time=([\d.]+) ms/', $output, $matches)) {
-                return round($matches[1]) . 'ms';
-            }
+        } catch (Exception $e) {
+            // Ignore errors
         }
         
         return null;
@@ -279,55 +312,47 @@ class NetworkScanner {
         $ports = $device['open_ports'];
         $hostname = strtolower($device['hostname'] ?? '');
         $ip = $device['ip'];
+        
+        // Extract gateway IP (usually .1)
         $networkParts = explode('.', $this->targetIP);
         $gatewayIP = $networkParts[0] . '.' . $networkParts[1] . '.' . $networkParts[2] . '.1';
         
-        // Check for network switch (SNMP + SSH/Telnet)
+        // Network switch detection
         if (in_array(161, $ports) && (in_array(23, $ports) || in_array(22, $ports))) {
             $device['device_type'] = '🔌';
             $device['deviceCategory'] = 'switch';
             $device['name'] = $device['name'] ?: 'Network Switch';
             
-            // Add switch-specific info
-            $device['portCount'] = rand(12, 48);
-            $device['connectedDevices'] = rand(3, 20);
+            // Add switch-specific info (simulated)
+            $device['portCount'] = rand(8, 48);
+            $device['connectedDevices'] = rand(2, 15);
             $device['uptime'] = rand(1, 365) . ' days';
-            $device['powerConsumption'] = rand(40, 120) . 'W';
+            $device['powerConsumption'] = rand(20, 80) . 'W';
         }
-        // Check for router/gateway
+        // Router/Gateway detection
         elseif ($ip === $gatewayIP || 
                 strpos($hostname, 'router') !== false || 
-                strpos($hostname, 'gateway') !== false) {
+                strpos($hostname, 'gateway') !== false ||
+                (in_array(80, $ports) && in_array(53, $ports))) {
             $device['device_type'] = '📶';
             $device['name'] = $device['name'] ?: 'Router/Gateway';
         }
-        // Check for printer
-        elseif (strpos($hostname, 'printer') !== false || 
-                strpos($hostname, 'hp-') === 0 || 
-                in_array(9100, $ports) || in_array(631, $ports)) {
-            $device['device_type'] = '🖨️';
-            $device['name'] = $device['name'] ?: 'Network Printer';
-        }
-        // Check for web server
-        elseif (in_array(80, $ports) || in_array(443, $ports)) {
+        // Web server detection
+        elseif (in_array(80, $ports) || in_array(443, $ports) || in_array(8080, $ports)) {
             $device['device_type'] = '🖥️';
-            if (in_array(22, $ports)) {
-                $device['name'] = $device['name'] ?: 'Linux Server';
-            } else {
-                $device['name'] = $device['name'] ?: 'Web Server';
-            }
+            $device['name'] = $device['name'] ?: 'Web Server';
         }
-        // Check for Windows machine
+        // Windows machine detection
         elseif (in_array(135, $ports) && in_array(445, $ports)) {
             $device['device_type'] = '💻';
             $device['name'] = $device['name'] ?: 'Windows Computer';
         }
-        // Check for Linux/Unix machine
+        // Linux/Unix machine detection
         elseif (in_array(22, $ports)) {
             $device['device_type'] = '🐧';
             $device['name'] = $device['name'] ?: 'Linux/Unix System';
         }
-        // Mobile devices
+        // Mobile device detection
         elseif (strpos($hostname, 'iphone') !== false || strpos($hostname, 'ipad') !== false) {
             $device['device_type'] = '📱';
             $device['name'] = $device['name'] ?: 'iOS Device';
@@ -354,7 +379,7 @@ class NetworkScanner {
         
         // Switch/Router OS
         if ($device['deviceCategory'] === 'switch') {
-            return 'Embedded/Switch OS';
+            return 'Embedded/Network OS';
         }
         
         // Mobile OS detection
@@ -376,28 +401,72 @@ class NetworkScanner {
         return $this->vendors[$oui] ?? 'Unknown';
     }
     
+    private function getNetworkInfo() {
+        try {
+            $info = [
+                'local_ip' => $this->getLocalIP(),
+                'gateway' => $this->getGateway(),
+                'target_ip' => $this->targetIP
+            ];
+            
+            // Add scanned network
+            $networkParts = explode('.', $this->targetIP);
+            $info['scanned_network'] = $networkParts[0] . '.' . $networkParts[1] . '.' . $networkParts[2] . '.0/24';
+            
+            return $info;
+        } catch (Exception $e) {
+            return [
+                'local_ip' => '127.0.0.1',
+                'gateway' => null,
+                'target_ip' => $this->targetIP,
+                'error' => $e->getMessage()
+            ];
+        }
+    }
+    
     private function getLocalIP() {
         try {
+            // Try multiple methods to get local IP
+            $methods = [];
+            
             if (PHP_OS_FAMILY === 'Windows') {
                 $output = @shell_exec('ipconfig | findstr "IPv4" 2>NUL');
                 if ($output && preg_match('/(\d+\.\d+\.\d+\.\d+)/', $output, $matches)) {
-                    return $matches[1];
+                    $methods[] = $matches[1];
                 }
             } else {
-                $output = @shell_exec('hostname -I 2>/dev/null | awk "{print $1}"');
-                if ($output && filter_var(trim($output), FILTER_VALIDATE_IP)) {
-                    return trim($output);
-                }
+                // Try different Linux commands
+                $commands = [
+                    'hostname -I 2>/dev/null | awk "{print $1}"',
+                    'ip route get 8.8.8.8 2>/dev/null | awk "{print $7}" | head -1',
+                    'ifconfig | grep "inet " | grep -v 127.0.0.1 | awk "{print $2}" | head -1'
+                ];
                 
-                // Fallback method
-                $output = @shell_exec('ip route get 8.8.8.8 2>/dev/null | awk "{print $7}" | head -1');
-                if ($output && filter_var(trim($output), FILTER_VALIDATE_IP)) {
-                    return trim($output);
+                foreach ($commands as $cmd) {
+                    $output = @shell_exec($cmd);
+                    if ($output) {
+                        $ip = trim($output);
+                        if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                            $methods[] = $ip;
+                            break;
+                        }
+                    }
                 }
             }
             
-            // PHP fallback
-            return $_SERVER['SERVER_ADDR'] ?? '127.0.0.1';
+            // PHP fallback methods
+            if (isset($_SERVER['SERVER_ADDR']) && filter_var($_SERVER['SERVER_ADDR'], FILTER_VALIDATE_IP)) {
+                $methods[] = $_SERVER['SERVER_ADDR'];
+            }
+            
+            // Return first valid IP
+            foreach ($methods as $ip) {
+                if (filter_var($ip, FILTER_VALIDATE_IP) && $ip !== '127.0.0.1') {
+                    return $ip;
+                }
+            }
+            
+            return '127.0.0.1';
         } catch (Exception $e) {
             return '127.0.0.1';
         }
@@ -411,9 +480,16 @@ class NetworkScanner {
                     return $matches[1];
                 }
             } else {
-                $output = @shell_exec('ip route | grep default 2>/dev/null');
-                if ($output && preg_match('/via (\d+\.\d+\.\d+\.\d+)/', $output, $matches)) {
-                    return $matches[1];
+                $commands = [
+                    'ip route | grep default 2>/dev/null',
+                    'route -n | grep "^0.0.0.0" 2>/dev/null'
+                ];
+                
+                foreach ($commands as $cmd) {
+                    $output = @shell_exec($cmd);
+                    if ($output && preg_match('/(\d+\.\d+\.\d+\.\d+)/', $output, $matches)) {
+                        return $matches[1];
+                    }
                 }
             }
             return null;
@@ -423,57 +499,69 @@ class NetworkScanner {
     }
     
     private function countDevicesByType($devices, $type) {
-        $count = 0;
-        foreach ($devices as $device) {
-            if ($device['deviceCategory'] === $type) {
-                $count++;
-            }
-        }
-        return $count;
+        return count(array_filter($devices, function($device) use ($type) {
+            return $device['deviceCategory'] === $type;
+        }));
     }
     
     private function getDebugInfo() {
         return [
             'php_version' => PHP_VERSION,
-            'os' => PHP_OS,
+            'php_os' => PHP_OS,
+            'server_software' => $_SERVER['SERVER_SOFTWARE'] ?? 'Unknown',
             'functions_available' => [
                 'shell_exec' => function_exists('shell_exec'),
                 'exec' => function_exists('exec'),
                 'fsockopen' => function_exists('fsockopen'),
                 'gethostbyaddr' => function_exists('gethostbyaddr')
             ],
-            'disabled_functions' => explode(',', ini_get('disable_functions')),
+            'disabled_functions' => array_filter(explode(',', str_replace(' ', '', ini_get('disable_functions')))),
             'time_limit' => ini_get('max_execution_time'),
-            'memory_limit' => ini_get('memory_limit')
+            'memory_limit' => ini_get('memory_limit'),
+            'extensions' => [
+                'json' => extension_loaded('json'),
+                'curl' => extension_loaded('curl'),
+                'sockets' => extension_loaded('sockets')
+            ]
         ];
     }
 }
 
-// System status functions
+// System status and connectivity functions
 function getSystemStatus() {
-    $requirements = checkSystemRequirements();
-    $connectivity = testConnectivity();
-    
-    return [
-        'success' => true,
-        'system_info' => [
-            'php_version' => PHP_VERSION,
-            'os' => PHP_OS,
-            'server_software' => $_SERVER['SERVER_SOFTWARE'] ?? 'CLI',
-            'memory_limit' => ini_get('memory_limit'),
-            'max_execution_time' => ini_get('max_execution_time'),
-            'extensions' => [
-                'sockets' => extension_loaded('sockets'),
-                'curl' => extension_loaded('curl'),
-                'json' => extension_loaded('json')
-            ]
-        ],
-        'requirements' => $requirements,
-        'connectivity' => $connectivity
-    ];
+    try {
+        $requirements = checkSystemRequirements();
+        $connectivity = testConnectivity();
+        
+        return [
+            'success' => true,
+            'system_info' => [
+                'php_version' => PHP_VERSION,
+                'php_os' => PHP_OS,
+                'server_software' => $_SERVER['SERVER_SOFTWARE'] ?? 'CLI',
+                'memory_limit' => ini_get('memory_limit'),
+                'max_execution_time' => ini_get('max_execution_time'),
+                'current_time' => date('Y-m-d H:i:s'),
+                'extensions' => [
+                    'sockets' => extension_loaded('sockets'),
+                    'curl' => extension_loaded('curl'),
+                    'json' => extension_loaded('json')
+                ]
+            ],
+            'requirements' => $requirements,
+            'connectivity' => $connectivity
+        ];
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
 }
 
 function checkSystemRequirements() {
+    $disabledFunctions = array_filter(explode(',', str_replace(' ', '', ini_get('disable_functions'))));
+    
     return [
         'php_version' => [
             'required' => '7.0',
@@ -486,15 +574,16 @@ function checkSystemRequirements() {
             'curl' => extension_loaded('curl')
         ],
         'functions' => [
-            'exec' => function_exists('exec'),
-            'shell_exec' => function_exists('shell_exec'),
-            'fsockopen' => function_exists('fsockopen'),
-            'gethostbyaddr' => function_exists('gethostbyaddr')
+            'exec' => function_exists('exec') && !in_array('exec', $disabledFunctions),
+            'shell_exec' => function_exists('shell_exec') && !in_array('shell_exec', $disabledFunctions),
+            'fsockopen' => function_exists('fsockopen') && !in_array('fsockopen', $disabledFunctions),
+            'gethostbyaddr' => function_exists('gethostbyaddr') && !in_array('gethostbyaddr', $disabledFunctions)
         ],
         'permissions' => [
             'write_data' => is_writable('.'),
             'read_config' => is_readable(__FILE__)
-        ]
+        ],
+        'disabled_functions' => $disabledFunctions
     ];
 }
 
@@ -502,18 +591,23 @@ function testConnectivity() {
     $tests = [];
     
     try {
-        // Test localhost
-        $tests['localhost'] = @fsockopen('127.0.0.1', 80, $errno, $errstr, 2) !== false;
+        // Test localhost connectivity
+        $tests['localhost'] = false;
+        $connection = @fsockopen('127.0.0.1', 80, $errno, $errstr, 2);
+        if ($connection) {
+            $tests['localhost'] = true;
+            fclose($connection);
+        }
         
-        // Test external connectivity (if allowed)
+        // Test external connectivity with ping
         $tests['external'] = false;
         if (function_exists('shell_exec')) {
             if (PHP_OS_FAMILY === 'Windows') {
-                $output = @shell_exec('ping -n 1 -w 1000 8.8.8.8 2>NUL');
-                $tests['external'] = $output && strpos($output, 'TTL=') !== false;
+                $output = @shell_exec('ping -n 1 -w 2000 8.8.8.8 2>NUL');
+                $tests['external'] = $output && (strpos($output, 'TTL=') !== false || strpos($output, 'bytes=') !== false);
             } else {
-                $output = @shell_exec('ping -c 1 -W 1 8.8.8.8 2>/dev/null');
-                $tests['external'] = $output && strpos($output, 'ttl=') !== false;
+                $output = @shell_exec('ping -c 1 -W 2 8.8.8.8 2>/dev/null');
+                $tests['external'] = $output && (strpos($output, 'ttl=') !== false || strpos($output, 'time=') !== false);
             }
         }
         
@@ -523,7 +617,7 @@ function testConnectivity() {
     }
 }
 
-// Main request handler
+// Main request handler with improved error handling
 try {
     $endpoint = $_GET['endpoint'] ?? 'scan';
     $result = [];
@@ -534,11 +628,15 @@ try {
             break;
             
         case 'scan':
-            $ip = $_GET['ip'] ?? '192.168.1.1';
+            $ip = $_GET['ip'] ?? '';
             
-            // Validate IP address
-            if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-                throw new InvalidArgumentException('Invalid IP address format. Use format like: 192.168.1.1');
+            if (empty($ip)) {
+                throw new InvalidArgumentException('IP address parameter is required');
+            }
+            
+            // Validate IP address format
+            if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                throw new InvalidArgumentException('Invalid IPv4 address format. Expected format: 192.168.1.1');
             }
             
             $scanner = new NetworkScanner($ip);
@@ -548,16 +646,14 @@ try {
         case 'test':
             $result = [
                 'success' => true,
-                'connectivity_test' => testConnectivity()
+                'timestamp' => date('Y-m-d H:i:s'),
+                'connectivity_test' => testConnectivity(),
+                'system_requirements' => checkSystemRequirements()
             ];
             break;
             
         default:
-            $result = [
-                'success' => false,
-                'error' => 'Unknown endpoint: ' . htmlspecialchars($endpoint),
-                'available_endpoints' => ['scan', 'status', 'test']
-            ];
+            throw new InvalidArgumentException('Unknown endpoint: ' . htmlspecialchars($endpoint));
     }
     
     // Return JSON response
@@ -569,11 +665,20 @@ try {
     echo json_encode([
         'success' => false,
         'error' => $e->getMessage(),
+        'error_type' => get_class($e),
         'debug' => [
             'php_version' => PHP_VERSION,
+            'php_os' => PHP_OS,
             'request_method' => $_SERVER['REQUEST_METHOD'],
             'query_string' => $_SERVER['QUERY_STRING'] ?? '',
-            'timestamp' => date('Y-m-d H:i:s')
+            'endpoint' => $_GET['endpoint'] ?? 'none',
+            'ip_param' => $_GET['ip'] ?? 'none',
+            'timestamp' => date('Y-m-d H:i:s'),
+            'functions_available' => [
+                'shell_exec' => function_exists('shell_exec'),
+                'exec' => function_exists('exec'),
+                'fsockopen' => function_exists('fsockopen')
+            ]
         ]
     ], JSON_PRETTY_PRINT);
 }

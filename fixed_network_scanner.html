@@ -81,17 +81,24 @@
             flex-wrap: wrap;
         }
         
-        .ip-input {
+        .ip-input, .subnet-select {
             padding: 12px 20px;
             border: 2px solid #ddd;
             border-radius: 25px;
             outline: none;
             font-size: 16px;
-            width: 280px;
             text-align: center;
         }
         
-        .ip-input:focus {
+        .ip-input {
+            width: 280px;
+        }
+        
+        .subnet-select {
+            width: 150px;
+        }
+        
+        .ip-input:focus, .subnet-select:focus {
             border-color: #667eea;
             box-shadow: 0 0 10px rgba(102, 126, 234, 0.3);
         }
@@ -118,6 +125,22 @@
         .example-ip:hover {
             background: rgba(102, 126, 234, 0.2);
             transform: translateY(-1px);
+        }
+        
+        .custom-range {
+            display: none;
+            gap: 10px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        
+        .custom-range input {
+            width: 150px;
+            padding: 8px 12px;
+            border: 2px solid #ddd;
+            border-radius: 15px;
+            font-size: 14px;
+            text-align: center;
         }
         
         .scan-btn, .refresh-btn, .status-btn {
@@ -450,6 +473,19 @@
                     <div class="example-ip" onclick="setExampleIP('172.16.1.1')">172.16.1.1</div>
                 </div>
             </div>
+            <select class="subnet-select" id="subnetMask" onchange="toggleCustomRange()">
+                <option value="24">Scan /24 subnet (254 IPs)</option>
+                <option value="16">Scan /16 subnet (65k IPs)</option>
+                <option value="8">Scan /8 subnet (16M IPs)</option>
+                <option value="custom">Custom IP Range</option>
+            </select>
+        </div>
+        
+        <div class="controls custom-range" id="customRange">
+            <span>From:</span>
+            <input type="text" id="startIP" placeholder="192.168.1.1">
+            <span>To:</span>
+            <input type="text" id="endIP" placeholder="192.168.1.254">
         </div>
         
         <div class="controls">
@@ -525,6 +561,17 @@
         function setExampleIP(ip) {
             document.getElementById('ipInput').value = ip;
             document.getElementById('ipInput').focus();
+        }
+
+        function toggleCustomRange() {
+            const subnetMask = document.getElementById('subnetMask').value;
+            const customRange = document.getElementById('customRange');
+            
+            if (subnetMask === 'custom') {
+                customRange.style.display = 'flex';
+            } else {
+                customRange.style.display = 'none';
+            }
         }
 
         async function detectLocalNetwork() {
@@ -606,6 +653,7 @@
             if (scanning) return;
             
             const ip = document.getElementById('ipInput').value.trim();
+            const subnetMask = document.getElementById('subnetMask').value;
             
             if (!ip) {
                 showError('Please enter an IP address');
@@ -617,6 +665,22 @@
                 return;
             }
 
+            // Validate custom range if selected
+            if (subnetMask === 'custom') {
+                const startIP = document.getElementById('startIP').value.trim();
+                const endIP = document.getElementById('endIP').value.trim();
+                
+                if (!startIP || !endIP) {
+                    showError('Please enter both start and end IP addresses for custom range');
+                    return;
+                }
+                
+                if (!isValidIP(startIP) || !isValidIP(endIP)) {
+                    showError('Please enter valid IPv4 addresses for custom range');
+                    return;
+                }
+            }
+
             scanning = true;
             showLoading(true);
             hideError();
@@ -625,7 +689,10 @@
             document.getElementById('refreshBtn').disabled = true;
 
             try {
-                const response = await fetch(`${API_BASE}?endpoint=scan&ip=${encodeURIComponent(ip)}`);
+                // Build scan parameters - simplified for basic scanning
+                let scanParams = `endpoint=scan&ip=${encodeURIComponent(ip)}`;
+
+                const response = await fetch(`${API_BASE}?${scanParams}`);
                 const data = await response.json();
 
                 if (data.success) {
@@ -636,7 +703,8 @@
                     displayDevices();
                     displayNetworkInfo(data);
                     
-                    showMessage(`Network scan completed! Found ${networkDevices.length} devices in ${data.duration || 'unknown time'}.`);
+                    const scanRange = getScanRangeDescription(ip, subnetMask);
+                    showMessage(`Network scan completed! Found ${networkDevices.length} devices in ${scanRange} (${data.duration || 'unknown time'}).`);
                 } else {
                     showError(data.error || 'Network scan failed');
                     displayEmptyResults();
@@ -650,6 +718,25 @@
                 scanning = false;
                 document.getElementById('scanBtn').disabled = false;
                 document.getElementById('refreshBtn').disabled = false;
+            }
+        }
+
+        function getScanRangeDescription(ip, subnetMask) {
+            if (subnetMask === 'custom') {
+                const startIP = document.getElementById('startIP').value.trim();
+                const endIP = document.getElementById('endIP').value.trim();
+                return `${startIP} to ${endIP}`;
+            }
+            
+            const parts = ip.split('.');
+            switch (subnetMask) {
+                case '8':
+                    return `${parts[0]}.0.0.0/8 network`;
+                case '16':
+                    return `${parts[0]}.${parts[1]}.0.0/16 network`;
+                case '24':
+                default:
+                    return `${parts[0]}.${parts[1]}.${parts[2]}.0/24 network`;
             }
         }
 
